@@ -6,6 +6,8 @@ from pytorch_grad_cam.activations_and_gradients import ActivationsAndGradients
 from pytorch_grad_cam.utils.svd_on_activations import get_2d_projection
 from pytorch_grad_cam.utils.image import scale_cam_image
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
+from skimage.metrics import structural_similarity as ssim
+from scipy.spatial.distance import cosine
 
 
 class BaseCAM:
@@ -141,8 +143,36 @@ class BaseCAM:
             cam_per_target_layer: np.ndarray) -> np.ndarray:
         cam_per_target_layer = np.concatenate(cam_per_target_layer, axis=1)
         cam_per_target_layer = np.maximum(cam_per_target_layer, 0)
-        result = np.mean(cam_per_target_layer, axis=1)
+        
+        # # 这两行是原版
+        # result = np.mean(cam_per_target_layer, axis=1)
+        # return scale_cam_image(result)
+
+        # 下面是weighted
+        # 取最后一层CAM
+        last_layer_cam = cam_per_target_layer[:, -1:, :, :]
+
+        # cosine
+        weights = self.get_cosine_sim(cam_per_target_layer, last_layer_cam)
+
+        # 使用权重计算加权平均
+        result = np.sum(cam_per_target_layer * weights.reshape(1, -1, 1, 1), axis=1)
+        
         return scale_cam_image(result)
+
+    def get_cosine_sim(self, cam_per_target_layer, last_layer_cam):
+                # 初始化权重
+        weights = np.zeros((cam_per_target_layer.shape[1],))
+        
+        # 计算每层与最后一层的结构相似度，作为权重
+        for i in range(cam_per_target_layer.shape[1]):
+            layer_cam = cam_per_target_layer[:, i:i+1, :, :]
+            # similarity = ssim(layer_cam.squeeze(), last_layer_cam.squeeze(), data_range=1.0)
+            similarity = 1 - cosine(layer_cam.reshape(-1), last_layer_cam.reshape(-1))
+            weights[i] = max(similarity, 0)
+        
+        return weights / np.sum(weights)
+
 
     def forward_augmentation_smoothing(self,
                                        input_tensor: torch.Tensor,
